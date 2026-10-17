@@ -7,7 +7,7 @@ Uso:
   python fuentes/train.py --model rf
 Parámetros importantes:
   --data-path : ruta al CSV limpio (por defecto datos/datos_limp/clean_adult.csv)
-  --mlflow-uri : URI de tracking (por defecto file:./mlruns)
+  --mlflow-uri : URI de tracking (por defecto file:./mlruns) pero puede ser sobrescrito por la variable de entorno MLFLOW_TRACKING_URI
 """
 import argparse
 import os
@@ -38,9 +38,14 @@ def get_feature_lists(df):
     return X, y, numeric, categorical
 
 
-def make_preprocessor(numeric, categorical):
+def make_preprocessor(numeric, categorical, sparse_ohe=False):
     numeric_pipe = Pipeline([("scaler", StandardScaler())])
-    cat_pipe = Pipeline([("ohe", OneHotEncoder(handle_unknown="ignore", sparse=False))])
+    # OneHotEncoder: use sparse=False for compatibility, but allow sparse output if requested
+    if sparse_ohe:
+        cat_pipe = Pipeline([("ohe", OneHotEncoder(handle_unknown="ignore", sparse=True))])
+    else:
+        # sparse=False is widely supported across sklearn versions
+        cat_pipe = Pipeline([("ohe", OneHotEncoder(handle_unknown="ignore", sparse=False))])
     preprocessor = ColumnTransformer([("num", numeric_pipe, numeric), ("cat", cat_pipe, categorical)])
     return preprocessor
 
@@ -64,12 +69,19 @@ def read_dataset_sha(path="datos/datos_ini/dataset_version.txt"):
 
 
 def main(args):
-    mlflow.set_tracking_uri(args.mlflow_uri)
+    # Allow MLFLOW_TRACKING_URI environment variable to override CLI argument (useful in Colab)
+    mlflow_uri = args.mlflow_uri
+    env_uri = os.environ.get("MLFLOW_TRACKING_URI")
+    if env_uri:
+        mlflow_uri = env_uri
+
+    mlflow.set_tracking_uri(mlflow_uri)
+
     data = load_data(args.data_path)
     X, y, numeric, categorical = get_feature_lists(data)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
-    preprocessor = make_preprocessor(numeric, categorical)
+    preprocessor = make_preprocessor(numeric, categorical, sparse_ohe=args.ohe_sparse)
 
     if args.model == "logreg":
         clf = LogisticRegression(max_iter=1000, solver="liblinear", random_state=42)
@@ -85,9 +97,12 @@ def main(args):
 
     with mlflow.start_run():
         mlflow.log_param("model", args.model)
+        # log mlflow tracking uri used
+        mlflow.log_param("mlflow_tracking_uri", mlflow_uri)
         ds_sha = read_dataset_sha()
         if ds_sha:
             mlflow.log_param("dataset_sha256", ds_sha)
+
         gs.fit(X_train, y_train)
 
         best = gs.best_estimator_
@@ -132,5 +147,6 @@ if __name__ == "__main__":
     parser.add_argument("--data-path", type=str, default="datos/datos_limp/clean_adult.csv")
     parser.add_argument("--model", type=str, choices=["logreg", "rf"], default="logreg")
     parser.add_argument("--mlflow-uri", type=str, default="file:./mlruns")
+    parser.add_argument("--ohe-sparse", action="store_true", help="Use sparse OneHotEncoder output to save memory (useful in Colab)")
     args = parser.parse_args()
     main(args)
