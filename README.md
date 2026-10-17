@@ -52,4 +52,4 @@ Actividad5/
 │── .gitignore
 
 Contacto
-- Autor: (añade tu nombre)
+- Autor: (Pablo Ivan Pacheco)
